@@ -1,0 +1,161 @@
+
+ansible-playbook ansible/main.yml
+
+for i in $(cat hosts.txt); do echo "$i.scp.prod.kafd.sa :" ;dig +short $i.scp.prod.kafd.sa ; done
+
+cd ~/ocpinstall/install/
+cp install-config.yaml install-config.bak
+openshift-install create manifests
+
+rm -rf openshift/99_openshift-cluster-api_master-machines-*.yaml openshift/99_openshift-cluster-api_worker-machineset-*.yaml
+openshift-install create ignition-configs
+sudo cp ~/ocpinstall/install/*.ign /var/www/html/
+sudo chown apache:apache /var/www/html/*
+
+cat >merge-bootstrap.ign <<EOF
+{
+  "ignition": {
+    "config": {
+      "merge": [
+        {
+          "source": "http://10.47.155.15/bootstrap.ign",
+          "verification": {}
+        }
+      ]
+    },
+    "timeouts": {},
+    "version": "3.2.0"
+  },
+  "networkd": {},
+  "passwd": {},
+  "storage": {},
+  "systemd": {}
+}
+EOF
+cat merge-bootstrap.ign
+
+export GOVC_URL=
+export GOVC_USERNAME=
+export GOVC_INSECURE=1
+export GOVC_PASSWORD=
+
+
+#list all VMs
+govc ls /*/vm/*
+
+for i in bootstrap master01 master02 master03 worker-0 worker-1 ;do govc vm.power -on /datacenter/vm/W.../$i.scp.prod.kafd.sa; done
+
+
+Prepare VMs (From https://access.redhat.com/solutions/5499911)
+
+HOST_CONFIG=$(cat ~/ocpinstall/install/merge-bootstrap.ign | base64 -w0)
+IPCFG="ip=10.47.155.110::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=workload_share_dwPsq -c=8 -m=24576 -folder=sandbox-mqkpf  -on=false bootstrap.scp.prod.kafd.sa
+govc vm.disk.change -vm bootstrap.scp.prod.kafd.sa -size 200G
+govc vm.change -vm bootstrap.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm bootstrap.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${HOST_CONFIG}"
+govc vm.change -vm bootstrap.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm bootstrap.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.change -vm bootstrap.scp.prod.kafd.sa -e "stealclock.enable=TRUE"
+govc vm.power -on bootstrap.scp.prod.kafd.sa
+
+
+
+for i in 1 2 3 ;do
+MASTER_CONFIG=$(cat ~/ocpinstall/install/master.ign | base64 -w0)
+IPCFG="ip=10.47.155.11$i::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=8 -m=24576 -folder=XXXXXX  -on=false master0$i.scp.prod.kafd.sa
+govc vm.disk.change -vm master0$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm master0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm master0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${MASTER_CONFIG}"
+govc vm.change -vm master0$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm master0$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on master0$i.scp.prod.kafd.sa
+done
+
+
+for i in 1 2 3 ;do
+INFRA_CONFIG=$(cat ~/ocpinstall/install/worker.ign | base64 -w0)
+IPCFG="ip=10.47.155.11$(($i + 3))::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=16 -m=65536 -folder=XXXXXX  -on=false infra0$i.scp.prod.kafd.sa
+govc vm.disk.change -vm infra$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm infra0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm infra0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${INFRA_CONFIG}"
+govc vm.change -vm infra0$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm infra0$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on infra0$i.scp.prod.kafd.sa
+done
+
+for i in 1 2 3 ;do
+ODF_CONFIG=$(cat ~/ocpinstall/install/worker.ign | base64 -w0)
+IPCFG="ip=10.47.155.11$(($i + 6))::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=16 -m=32768 -folder=XXXXXX  -on=false storage0$i.scp.prod.kafd.sa
+govc vm.disk.change -vm storage0$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm storage0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm storage0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${ODF_CONFIG}"
+govc vm.change -vm storage0$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm storage0$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on storage0$i.scp.prod.kafd.sa
+done
+
+for i in 1 2 3 4 5 6 7 8 9 ;do
+WORKER1_CONFIG=$(cat ~/ocpinstall/install/worker.ign | base64 -w0)
+IPCFG="ip=10.47.157.1$(($i + 6))::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=8 -m=32768 -folder=XXXXXX  -on=false sagwrkr0$i.scp.prod.kafd.sa
+govc vm.disk.change -vm sagwrkr0$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm sagwrkr0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm sagwrkr0$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${WORKER1_CONFIG}"
+govc vm.change -vm sagwrkr0$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm sagwrkr0$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on sagwrkr0$i.scp.prod.kafd.sa
+done
+
+for i in 0 1 ;do
+WORKER2_CONFIG=$(cat ~/ocpinstall/install/worker.ign | base64 -w0)
+IPCFG="ip=10.47.157.2$i::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=8 -m=32768 -folder=XXXXXX  -on=false sagwrkr1$i.scp.prod.kafd.sa
+govc vm.disk.change -vm sagwrkr1$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm sagwrkr1$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm sagwrkr1$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${WORKER2_CONFIG}"
+govc vm.change -vm sagwrkr1$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm sagwrkr1$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on sagwrkr1$i.scp.prod.kafd.sa
+done
+
+for i in 1 2 3 4 5 6 7 8  ;do
+WORKER3_CONFIG=$(cat ~/ocpinstall/install/worker.ign | base64 -w0)
+IPCFG="ip=10.47.157.4$i::10.47.155.254:255.255.255.0:::none  nameserver=10.47.155.x"
+govc vm.clone -vm=ocp4-15 -ds=XXXXXX -c=8 -m=32768 -folder=XXXXXX  -on=false onewrkr$i.scp.prod.kafd.sa
+govc vm.disk.change -vm onewrkr1$i.scp.prod.kafd.sa -size 200G
+govc vm.change -vm onewrkr1$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data.encoding=base64"
+govc vm.change -vm onewrkr1$i.scp.prod.kafd.sa -e "guestinfo.ignition.config.data=${WORKER3_CONFIG}"
+govc vm.change -vm onewrkr1$i.scp.prod.kafd.sa -e "guestinfo.afterburn.initrd.network-kargs=${IPCFG}"
+govc vm.change -vm onewrkr1$i.scp.prod.kafd.sa -e "disk.EnableUUID=TRUE"
+govc vm.power -on onewrkr1$i.scp.prod.kafd.sa
+done
+
+
+
+
+
+
+
+
+
+openshift-install wait-for bootstrap-complete --dir ~/ocpinstall/install --log-level=debug
+
+
+oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs --no-run-if-empty oc adm certificate approve
+
+
+Clean up 
+
+for i in  1 2 3 ;do govc vm.power -off $i.scp.prod.kafd.sa; done
+
+for i in bootstrap  ;do govc vm.destroy /SDDC-Datacenter/vm/Workloads/sandbox-mqkpf/$i.scp.prod.kafd.sa; done
+
+
+for i in bootstrap master-0 master-1 master-2 ;do govc vm.destroy /SDDC-Datacenter/vm/Workloads/sandbox-mqkpf/$i.scp.prod.kafd.sa; done
+
+
+
